@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Ignore downloaded JARs
+pytag/jars/
+*.jar
+*.zip
+
 # Distribution / packaging
 .Python
 build/
