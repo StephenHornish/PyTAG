@@ -7,7 +7,6 @@
 from typing import List, Dict, Any, Union
 import numpy as np
 import gymnasium as gym
-
 from pytag import PyTAG, MultiAgentPyTAG
 
 

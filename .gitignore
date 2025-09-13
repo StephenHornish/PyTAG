@@ -11,6 +11,10 @@ pytag/jars/
 *.jar
 *.zip
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> b212e750 (Updatd PyTAG code for Gymnasium)
 # Distribution / packaging
 .Python
 build/
