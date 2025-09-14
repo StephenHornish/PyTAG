@@ -243,7 +243,6 @@ class TAGMultiplayerGym(gym.Env):
         if isinstance(actions, int):
             act = int(actions)
         elif isinstance(actions, dict):
-            # keys may be int or str
             if pid in actions:
                 act = int(actions[pid])
             elif str(pid) in actions:
@@ -253,25 +252,34 @@ class TAGMultiplayerGym(gym.Env):
         else:
             raise TypeError("actions must be int or dict {pid: action}")
 
-        # Step the Java env (turn-based): returns obs(list/dict), reward(list), done(bool), info(list/dict)
+        # Java step
         obs, reward, done, info = self._env.step(act)
 
-        # Normalize to Gymnasium-style return
+        # Normalize obs/info to dicts
         obs_d = self._to_obs_dict(obs)
         info_d = self._to_info_dict(info)
 
-        # Rewards from MultiAgentPyTAG are per-player (list/array); convert to dict
-        if isinstance(reward, (list, tuple, np.ndarray)):
+        # ---- Rewards: support dict / list / scalar ----
+        if isinstance(reward, dict):
+            # per-player mapping already
+            rew_d = {int(k): float(v) for k, v in reward.items()}
+        elif isinstance(reward, (list, tuple, np.ndarray)):
             rew_d = {i: float(r) for i, r in enumerate(reward)}
         else:
-            # rare: a single scalar (assign to current player only)
+            # scalar -> assign to current player
             rew_d = {pid: float(reward)}
 
-        terminated = bool(done)
-        truncated = False  # TAG does not distinguish truncation
+        # ---- Done: support dict / scalar ----
+        if isinstance(done, dict):
+            terminated = any(bool(v) for v in done.values())
+        else:
+            terminated = bool(done)
+
+        truncated = False  # TAG doesn't distinguish truncation
 
         self._last_obs, self._last_info = obs_d, info_d
         return obs_d, rew_d, terminated, truncated, info_d
+
 
     def close(self):
         # Underlying Java env doesn't require explicit close, but keep for symmetry

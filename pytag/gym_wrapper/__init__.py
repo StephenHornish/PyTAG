@@ -1,5 +1,7 @@
 # register the pyTAG environments as gym environments
 import gymnasium as gym
+from pytag.gym_wrapper.envs import TAGMultiplayerGym
+
 
 gym.envs.register(
      id='TAG/Diamant-v0',
