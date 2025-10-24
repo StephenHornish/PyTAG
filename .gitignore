@@ -11,10 +11,6 @@ pytag/jars/
 *.jar
 *.zip
 
-<<<<<<< HEAD
-=======
-
->>>>>>> b212e750 (Updatd PyTAG code for Gymnasium)
 # Distribution / packaging
 .Python
 build/
@@ -146,6 +142,10 @@ venv.bak/
 
 # mkdocs documentation
 /site
+
+# Ignore training logs and results
+PgTesting/ppo_pg_logs/
+PgTesting/results/
 
 # mypy
 .mypy_cache/
