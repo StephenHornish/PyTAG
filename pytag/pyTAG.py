@@ -7,7 +7,7 @@ import jpype.imports
 import numpy as np
 from typing import List
 def list_supported_games(as_json=False):
-    tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame.jar')
+    tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame_5.jar')
     jpype.addClassPath(tag_jar)
     if not jpype.isJVMStarted():
         jpype.startJVM(convertStrings=False)
@@ -36,19 +36,18 @@ def get_mcts_with_params(json_path):
 
 # create the game registry when PyTAG is loaded
 _game_registry = list_supported_games(as_json=True)
-class PyTAG():
-    """Core class to interact with the pyTAG environment. This class is a wrapper around the Java environment.
-    This class expects to have a single python agents
-    Note that the java jar package is expected to be in the jars folder of the same directory as this file.
-    """
-    def __init__(self, agent_ids: List[str], game_id: str="Diamant", seed: int=0, obs_type:str="vector"):
+
+class PyTAG:
+    """Python wrapper around the Java TAG environment."""
+    def __init__(self, agent_ids: List[str], game_id: str="Diamant", seed: int=0, obs_type: str="vector"):
         self._last_obs_vector = None
         self._last_action_mask = None
         self._rnd = random.Random(seed)
         self._obs_type = obs_type
 
         assert game_id in _game_registry, f"Game {game_id} not supported. Supported games are {_game_registry}"
-        assert _game_registry[game_id][obs_type] == True, f"Game {game_id} does not support observation type {obs_type}"
+        assert _game_registry[game_id][obs_type] is True, f"Game {game_id} does not support observation type {obs_type}"
+
         # start up the JVM
         tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame.jar')
         jpype.addClassPath(tag_jar)
@@ -67,65 +66,85 @@ class PyTAG():
             agents = [get_mcts_with_params(f"~/data/pyTAG/MCTS_for_{game_id}.json")() for agent_id in agent_ids]
         else:
             agents = [get_agent_class(agent_id)() for agent_id in agent_ids]
-        self._playerID = agent_ids.index("python") # if multiple python agents this is the first one
+
+        self._playerID = agent_ids.index("python")  # first python agent
         self._java_env = PyTAGEnv(gameType, None, jpype.java.util.ArrayList(agents), seed, True)
 
-        # Construct action/observation space
-        self._java_env.reset()
-        action_mask = self._java_env.getActionMask()
-        num_actions = len(action_mask)
-        self.action_space = num_actions
-
-        obs_size = int(self._java_env.getObservationSpace())
-        self.observation_space = obs_size # (obs_size,)
+        # DEFERRED: do NOT touch action/obs info until after reset()
+        self.action_space = None
+        self.observation_space = None
         self._action_tree_shape = 1
 
     def get_action_tree_shape(self):
         return self._action_tree_shape
 
     def reset(self):
+        # Build the game, run to the next decision, and build the action tree on the Java side
         self._java_env.reset()
         self._update_data()
 
-        return self._last_obs_vector, {"action_tree": self._action_tree_shape, "action_mask": self._last_action_mask,
-                                       "has_won": int(self.terminal_reward(self._playerID))}
+        # Lazily set spaces once we have a valid state
+        if self.action_space is None:
+            self.action_space = int(len(self._last_action_mask))
+        if self.observation_space is None:
+            # If Java exposes an observation-space size, you can still read it here; otherwise infer from obs
+            try:
+                self.observation_space = int(self._java_env.getObservationSpace())
+            except Exception:
+                self.observation_space = int(np.asarray(self._last_obs_vector).size)
+
+        info = {
+            "action_tree": self._action_tree_shape,
+            "action_mask": self._last_action_mask,
+            "has_won": int(self.terminal_reward(self._playerID)),
+        }
+        return self._last_obs_vector, info
 
     def step(self, action):
-        # Verify
-        if not self.is_valid_action(action):
-            # Execute a random action
-            valid_actions = np.where(self._last_action_mask)[0]
-            action = self._rnd.choice(valid_actions)
-            self._java_env.step(action)
-            # reward = -1
-        else:
-            self._java_env.step(action)
-            # reward = self.has_won(self._playerID)
-            reward = self.terminal_reward(self._playerID)
-            # if str(self._java_env.getPlayerResults()[self._playerID]) == "LOSE_GAME": reward = -1
+        # guard against pre-reset usage
+        if self._last_action_mask is None:
+            raise RuntimeError("Call reset() before step().")
 
+        # choose a valid action if needed
+        if not self.is_valid_action(action):
+            valid = np.flatnonzero(self._last_action_mask)
+            action = int(self._rnd.choice(valid)) if valid.size else 0
+
+        self._java_env.step(int(action))
         self._update_data()
-        done = self._java_env.isDone()
-        info = {"action_mask": self._last_action_mask,
-                "has_won": int(self.terminal_reward(self._playerID))}
-        return self._last_obs_vector, reward, done, info
+
+        terminated = bool(self._java_env.isDone())
+        curr_score = float(self._java_env.getReward())
+        reward = curr_score  # if you want deltas, compute and store prev in a member
+
+        info = {
+            "action_mask": self._last_action_mask.copy(),
+            "score": curr_score,
+            "has_won": int(self.terminal_reward(self._playerID)),
+        }
+        # 4-tuple is fine; your Gym wrapper maps (obs, rew, done, info) → (obs, rew, terminated, truncated, info)
+        return self._last_obs_vector, reward, terminated, info
 
     def close(self):
-        jpype.shutdownJVM()
+        if jpype.isJVMStarted():
+            jpype.shutdownJVM()
 
     def is_valid_action(self, action: int) -> bool:
-        return self._last_action_mask[action]
+        if self._last_action_mask is None:
+            return False
+        # bound check for safety
+        if action < 0 or action >= self._last_action_mask.shape[0]:
+            return False
+        return bool(self._last_action_mask[action])
 
     def _update_data(self):
         if self._obs_type == "vector":
             obs = self._java_env.getObservationVector()
             self._last_obs_vector = np.array(obs, dtype=np.float32)
         elif self._obs_type == "json":
-            obs = self._java_env.getObservationJson()
-            self._last_obs_vector = obs
-
-        action_mask = self._java_env.getActionMask()
-        self._last_action_mask = np.array(action_mask, dtype=bool)
+            self._last_obs_vector = self._java_env.getObservationJson()
+        # action mask now exists because Java reset() built the leaves
+        self._last_action_mask = np.array(self._java_env.getActionMask(), dtype=bool)
 
     def get_action_mask(self):
         return self._last_action_mask
@@ -137,10 +156,10 @@ class PyTAG():
         return self._java_env.getObservationJson()
 
     def sample_rnd_action(self):
+        if self._last_action_mask is None:
+            raise RuntimeError("Call reset() before sampling an action.")
         valid_actions = np.where(self._last_action_mask)[0]
-        action = self._rnd.choice(valid_actions)
-        return action
-
+        return int(self._rnd.choice(valid_actions)) if len(valid_actions) else 0
 
     def getPlayerID(self):
         return self._java_env.getPlayerID()
@@ -149,26 +168,19 @@ class PyTAG():
         return int(str(self._java_env.getPlayerResults()[player_id]) == "WIN_GAME")
 
     def terminal_reward(self, player_id=0):
-        # gets terminal reward - recommended to check if game is terminal as an unfinished game return the same value as a tie
-        player_result = str(self._java_env.getPlayerResults()[player_id])
-        if player_result == "WIN_GAME":
+        result = str(self._java_env.getPlayerResults()[player_id])
+        if result == "WIN_GAME":
             return 1.0
-        elif player_result == "LOSE_GAME":
+        elif result == "LOSE_GAME":
             return -1.0
         else:
             return 0.0
 
     def terminal_rewards(self):
-        player_result = self._java_env.getPlayerResults()
-        results = [0.0] * len(player_result)
-        for i in range(len(player_result)):
-            result = str(player_result[i])
-            if result == "WIN_GAME":
-                results[i] = 1.0
-            elif result == "LOSE_GAME":
-                results[i] = -1.0
-            else:
-                results[i] = 0.0
+        results = []
+        for r in self._java_env.getPlayerResults():
+            s = str(r)
+            results.append(1.0 if s == "WIN_GAME" else (-1.0 if s == "LOSE_GAME" else 0.0))
         return results
 
 class MultiAgentPyTAG(PyTAG):
