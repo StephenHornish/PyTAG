@@ -147,6 +147,8 @@ venv.bak/
 PgTesting/ppo_pg_logs/
 PgTesting/results/
 
+!PgTesting/results/**/*.py
+
 # mypy
 .mypy_cache/
 .dmypy.json
