@@ -69,7 +69,7 @@ This work was partly funded by the EPSRC CDT in Intelligent Games and Game Intel
 
 
 ## Running Power Grid 
-To run Power Grid you need to generate a Jar file from the TAG environment and drop it into the Jar file or use the default one provided. Models are trained by calling PPO in the pgtesting folder then they appear in the Pytag\Results Folder. Once the model is ready move it to a folder you make locally in the directory pgtesting/Results/PPO . Create Local Folder inside pgtesting/Results/PPO this is where all the evaluation scripts live and will be used to evaluate a trained model. 
+To run Power Grid you need to generate a Jar file from the TAG environment and drop it into the Jar directory (PyTAG\pytag\jars) the Jar is approximately half a GB. To create a Jar run the TableTop Game project as a Maven Build and it should generate a Jar File in the TabletopGames-master\target directory copy that jar file into Pytag. Models are trained by calling PPO in the pgtesting folder then they appear in the Pytag\Results Folder. Once the model is ready move it to a folder you make locally in the directory pgtesting/Results/PPO . Create Local Folder inside pgtesting/Results/PPO this is where all the evaluation scripts live and will be used to evaluate a trained model. 
 
 eval_saved_model - used for evaluating a trained model in a single RL player enviornment 
 eval_MARL - used for evaluating two trained RL models against one another 
