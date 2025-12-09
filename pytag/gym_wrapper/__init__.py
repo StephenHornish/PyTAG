@@ -38,3 +38,13 @@ gym.envs.register(
      entry_point='pytag.gym_wrapper.envs:TagSingleplayerGym',
      kwargs={"game_id": "LoveLetter", "agent_ids": ["python", "random"]}
 )
+
+gym.envs.register(
+     id='TAG/PowerGrid-v0',
+     entry_point='pytag.gym_wrapper.envs:TagSingleplayerGym',
+     kwargs={
+         "game_id": "PowerGrid",          # must match your GameType enum name in TAG
+         "agent_ids": ["python", "random"], # you can also use ["python", "random"]
+         "obs_type": "vector"             # or "json" if you prefer JSON observations
+     }
+)

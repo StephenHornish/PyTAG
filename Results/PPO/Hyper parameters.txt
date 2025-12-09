@@ -1,0 +1,29 @@
+n_envs = 8
+
+n_steps = 512
+
+batch_size = 1024
+
+n_epochs = 4
+
+gamma = 0.99
+
+gae_lambda = 0.90
+
+ent_coef = 0.005
+
+vf_coef = 0.7
+
+clip_range = 0.15
+
+lr = 3e-4
+
+max_episode-steps = 300
+
+total-timesteps = 10,000,000
+
+net_arch=[dict(pi=[256, 256, 128], vf=[256, 256, 128])],
+activation_fn=nn.Tanh,
+ortho_init=False
+
+python ppo.py --env-id TAG/PowerGrid-v0 --n-players 6 --opponent random --n-envs 8 --n-steps 512 --batch-size 1024 --n-epochs 4 --gamma 0.99 --gae-lambda 0.90 --ent-coef 0.005 --vf-coef 0.7 --clip-range 0.15 --lr 3e-4 --max-episode-steps 300 --total-timesteps 10000000

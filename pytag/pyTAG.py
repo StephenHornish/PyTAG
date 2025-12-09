@@ -7,7 +7,7 @@ import jpype.imports
 import numpy as np
 from typing import List
 def list_supported_games(as_json=False):
-    tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame_5.jar')
+    tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame03.jar')
     jpype.addClassPath(tag_jar)
     if not jpype.isJVMStarted():
         jpype.startJVM(convertStrings=False)
@@ -34,6 +34,9 @@ def get_mcts_with_params(json_path):
     json_string = str(json_string).replace('\'', '\"') # JAVA only uses " for string
     return jpype.JClass("players.mcts.MCTSPlayer")(PlayerFactory.fromJSONString(json_string))
 
+
+
+
 # create the game registry when PyTAG is loaded
 _game_registry = list_supported_games(as_json=True)
 
@@ -49,7 +52,7 @@ class PyTAG:
         assert _game_registry[game_id][obs_type] is True, f"Game {game_id} does not support observation type {obs_type}"
 
         # start up the JVM
-        tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame.jar')
+        tag_jar = os.path.join(os.path.dirname(__file__), 'jars', 'ModernBoardGame03.jar')
         jpype.addClassPath(tag_jar)
         if not jpype.isJVMStarted():
             jpype.startJVM(convertStrings=False)
@@ -79,26 +82,27 @@ class PyTAG:
         return self._action_tree_shape
 
     def reset(self):
-        # Build the game, run to the next decision, and build the action tree on the Java side
         self._java_env.reset()
         self._update_data()
 
-        # Lazily set spaces once we have a valid state
         if self.action_space is None:
             self.action_space = int(len(self._last_action_mask))
         if self.observation_space is None:
-            # If Java exposes an observation-space size, you can still read it here; otherwise infer from obs
             try:
                 self.observation_space = int(self._java_env.getObservationSpace())
             except Exception:
                 self.observation_space = int(np.asarray(self._last_obs_vector).size)
 
+        action_names = self._get_action_names()
+
         info = {
             "action_tree": self._action_tree_shape,
             "action_mask": self._last_action_mask,
+            "action_names": action_names,   # <-- added
             "has_won": int(self.terminal_reward(self._playerID)),
         }
         return self._last_obs_vector, info
+
 
     def step(self, action):
         # guard against pre-reset usage
@@ -117,12 +121,14 @@ class PyTAG:
         curr_score = float(self._java_env.getReward())
         reward = curr_score  # if you want deltas, compute and store prev in a member
 
+        action_names = self._get_action_names()
+
         info = {
             "action_mask": self._last_action_mask.copy(),
+            "action_names": action_names,   # <-- added
             "score": curr_score,
             "has_won": int(self.terminal_reward(self._playerID)),
         }
-        # 4-tuple is fine; your Gym wrapper maps (obs, rew, done, info) → (obs, rew, terminated, truncated, info)
         return self._last_obs_vector, reward, terminated, info
 
     def close(self):
@@ -145,6 +151,33 @@ class PyTAG:
             self._last_obs_vector = self._java_env.getObservationJson()
         # action mask now exists because Java reset() built the leaves
         self._last_action_mask = np.array(self._java_env.getActionMask(), dtype=bool)
+
+    def _get_action_names(self):
+        """
+        Ask Java for a stable, human-readable label per action ID
+        (same ordering as the mask / leaves).
+        """
+        names = []
+        try:
+            # Fast path: Java getLeafNames() returns all leaf node names in order
+            leaf_names = self._java_env.getLeafNames()
+            for nm in leaf_names:
+                names.append(str(nm))
+
+            # sanity check: if mismatch in length, fallback
+            if len(names) != len(self._last_action_mask):
+                raise RuntimeError("leaf_names length mismatch")
+        except Exception:
+            # Slow but reliable: query each ID individually
+            names = []
+            for i in range(len(self._last_action_mask)):
+                try:
+                    nm = self._java_env.getActionNameById(i)
+                    names.append(str(nm))
+                except Exception:
+                    names.append(str(i))
+        return names
+
 
     def get_action_mask(self):
         return self._last_action_mask
@@ -207,36 +240,90 @@ class MultiAgentPyTAG(PyTAG):
         action_mask = self._java_env.getActionMask()
         self._last_action_mask = np.array(action_mask, dtype=bool)
 
+    def _get_action_names(self):
+        """
+        Ask Java for a stable, human-readable label per action ID
+        (same ordering as the mask / leaves).
+        """
+        names = []
+        try:
+            # Option A: use getLeafNames() if it exists
+            leaf_names = self._java_env.getLeafNames()
+            # jpype will hand back something iterable
+            for nm in leaf_names:
+                names.append(str(nm))
+            # sanity check: if lengths mismatch, fall back to per-ID lookup
+            if len(names) != len(self._last_action_mask):
+                raise RuntimeError("leaf_names length mismatch")
+        except Exception:
+            # Option B fallback: call getActionNameById(i) one by one
+            names = []
+            for i in range(len(self._last_action_mask)):
+                try:
+                    nm = self._java_env.getActionNameById(i)
+                    names.append(str(nm))
+                except Exception:
+                    names.append(str(i))
+        return names
+
+
     def reset(self):
-        """Resets the environment and return the initial observations for the first python agent that needs to act."""
+        # Build the game, run to the next decision, and build the action tree on the Java side
         self._java_env.reset()
-        self._playerID = self.getPlayerID()
         self._update_data()
 
-        return {self._playerID :self._last_obs_vector}, {self._playerID:{"action_tree": self._action_tree_shape, "action_mask": self._last_action_mask,
-                                       "has_won": int(self.terminal_reward(self._playerID))}}
+        # Lazily set spaces once we have a valid state
+        if self.action_space is None:
+            self.action_space = int(len(self._last_action_mask))
+        if self.observation_space is None:
+            try:
+                self.observation_space = int(self._java_env.getObservationSpace())
+            except Exception:
+                self.observation_space = int(np.asarray(self._last_obs_vector).size)
+
+        # NEW: pull human-readable names from Java
+        action_names = self._get_action_names()
+
+        info = {
+            "action_tree": self._action_tree_shape,
+            "action_mask": self._last_action_mask,
+            "action_names": action_names,                # ← NEW
+            "has_won": int(self.terminal_reward(self._playerID)),
+        }
+        return self._last_obs_vector, info
+
 
     def step(self, action):
-        """Executes the action for the current player and returns the observations for the next python agent that needs to act.
-        Returns: obs, reward, done, info - obs is a dictionary with the agent id as key and the observation as value.
-        reward returns the reward for all agents at the same time, done also covers all agents, info is also just for the acting player"""
-        # Verify
-        if not self.is_valid_action(action):
-            # Execute a random action
-            valid_actions = np.where(self._last_action_mask)[0]
-            action = self._rnd.choice(valid_actions)
-            self._java_env.step(action)
-        else:
-            self._java_env.step(action)
+        # guard against pre-reset usage
+        if self._last_action_mask is None:
+            raise RuntimeError("Call reset() before step().")
 
+        # choose a valid action if needed
+        if not self.is_valid_action(action):
+            valid = np.flatnonzero(self._last_action_mask)
+            action = int(self._rnd.choice(valid)) if valid.size else 0
+
+        self._java_env.step(int(action))
         self._update_data()
-        # done is for all players
-        done = self._java_env.isDone()
-        info = {self._playerID: {"action_mask": self._last_action_mask,
-                "has_won": int(self.terminal_reward(self._playerID))}}
-        # rewards contains all the rewards for all players
-        rewards = {p_id: reward for (p_id, reward) in enumerate(self.terminal_rewards())}
-        return {self._playerID: self._last_obs_vector}, rewards, done, info
+
+        terminated = bool(self._java_env.isDone())
+        curr_score = float(self._java_env.getReward())
+        reward = curr_score  # (you can change this to deltas later)
+
+        # NEW: pull human-readable names
+        action_names = self._get_action_names()
+
+        info = {
+            "action_mask": self._last_action_mask.copy(),
+            "action_names": action_names,               # ← NEW
+            "score": curr_score,
+            "has_won": int(self.terminal_reward(self._playerID)),
+        }
+
+        # Gymnasium expects (obs, reward, terminated, truncated, info).
+        # You're doing 4-tuple (classic Gym) here; your external wrapper adapts it, so that's fine.
+        return self._last_obs_vector, reward, terminated, info
+
 
 
 if __name__ == "__main__":

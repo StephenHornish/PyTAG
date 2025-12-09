@@ -4,6 +4,8 @@ import argparse
 import numpy as np
 import gymnasium as gym
 
+from pathlib import Path
+
 import pytag.gym_wrapper  # registers TAG/*
 
 from gymnasium.wrappers import TimeLimit
@@ -13,6 +15,8 @@ from stable_baselines3.common.vec_env import VecNormalize
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from torch import nn
+from masked_eval_callback import MaskedEvalCallback
+
 
 
 
@@ -21,9 +25,14 @@ def parse_args():
     # Game settings
     p.add_argument("--env-id", type=str, default="TAG/PowerGrid-v0")
     p.add_argument("--n-players", type=int, default=4)
-    p.add_argument("--opponent", type=str, default="random", choices=["random", "osla", "mcts"])
+    p.add_argument(
+    "--opponents",
+    nargs="+",             # accept 1 or more values
+    default=["random"],    # default to one random opponent
+    help="Opponent list, e.g. --opponents random mcts"
+    )
+
     p.add_argument("--obs-type", type=str, default="vector", choices=["vector", "json"])
-    # Training runtime
     p.add_argument("--total-timesteps", type=int, default=5_000_000)
     p.add_argument("--n-envs", type=int, default=2)
     p.add_argument("--n-steps", type=int, default=2048)
@@ -36,10 +45,9 @@ def parse_args():
     p.add_argument("--clip-range", type=float, default=0.2)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--seed", type=int, default=42)
-    # Infra
+    p.add_argument("--seed", type=int, default=42)   
     p.add_argument("--max-episode-steps", type=int, default=300)
-    p.add_argument("--logdir", type=str, default="./ppo_pg_logs")
+    p.add_argument("--logdir", type=str, default="auto")
     p.add_argument("--eval-freq", type=int, default=10_000)
     p.add_argument("--checkpoint-freq", type=int, default=100_000)
     p.add_argument("--use-subproc", action="store_true")
@@ -59,16 +67,25 @@ def get_action_mask(env) -> np.ndarray:
     return np.ones(env.action_space.n, dtype=bool)
 
 
-def make_single_env(env_id: str, max_steps: int, *, n_players: int, opponent: str, obs_type: str):
-    assert n_players >= 2, "Need at least 2 players (1 learner + 1 bot)."
-    agent_ids = ["python"] + [opponent] * (n_players - 1)
+def make_single_env(env_id: str, max_steps: int, *, n_players: int, opponents: list, obs_type: str):
+    # Validate opponents length vs n_players
+    if len(opponents) != (n_players - 1):
+        raise ValueError(
+            f"Expected {n_players - 1} opponents for a {n_players}-player game, "
+            f"got {len(opponents)}: {opponents}"
+        )
+
+    # Seat 0 = python, rest are opponents
+    agent_ids = ["python"] + opponents
 
     def thunk():
         e = gym.make(env_id, agent_ids=agent_ids, obs_type=obs_type)
         e = TimeLimit(e, max_episode_steps=max_steps)
         e = ActionMasker(e, get_action_mask)
         return e
+
     return thunk
+
 
 
 def choose_policy(sample_env: gym.Env, requested: str) -> str:
@@ -91,6 +108,11 @@ def next_run_name(base_dir: str, base_name: str) -> str:
 
 def main():
     args = parse_args()
+    if args.logdir == "auto":
+        script_dir = Path(__file__).resolve().parent          
+        results_dir = script_dir.parent / "Results" / "PPO"    
+        args.logdir = str(results_dir)
+
     os.makedirs(args.logdir, exist_ok=True)
 
     # ---- Construct auto run name: PPO_np{players}_ns{n_steps}-k ----
@@ -100,14 +122,15 @@ def main():
     os.makedirs(run_dir, exist_ok=True)
 
     print(f"[Run] {run_name}")
-    print(f"[Players] {args.n_players} | [Opponent] {args.opponent} | [n_envs] {args.n_envs} | [n_steps] {args.n_steps}")
+    print(f"[Players] {args.n_players} | [Opponents] {args.opponents} | "f"[n_envs] {args.n_envs} | [n_steps] {args.n_steps}")
     print(f"[Logs] {run_dir}")
 
     # Build vectorized training envs
     env_fns = [
         make_single_env(
             args.env_id, args.max_episode_steps,
-            n_players=args.n_players, opponent=args.opponent, obs_type=args.obs_type
+            n_players=args.n_players, opponents=args.opponents, obs_type=args.obs_type
+
         )
         for _ in range(args.n_envs)
     ]
@@ -125,12 +148,13 @@ def main():
     eval_env = DummyVecEnv([
     make_single_env(
         args.env_id, args.max_episode_steps,
-        n_players=args.n_players, opponent=args.opponent, obs_type=args.obs_type
+        n_players=args.n_players, opponents=args.opponents, obs_type=args.obs_type
+
         )
     ])
     eval_env = VecMonitor(eval_env, filename=os.path.join(run_dir, "eval"))
 
-    # 🧩 Keep eval env fixed (no normalization updates)
+    
     eval_env = VecNormalize(
         eval_env,
         training=False,
@@ -140,7 +164,8 @@ def main():
     # Auto-select policy
     tmp = make_single_env(
         args.env_id, args.max_episode_steps,
-        n_players=args.n_players, opponent=args.opponent, obs_type=args.obs_type
+        n_players=args.n_players, opponents=args.opponents, obs_type=args.obs_type
+
     )()
     policy_type = choose_policy(tmp, args.policy)
     tmp.close()
@@ -161,7 +186,7 @@ def main():
         learning_rate=args.lr,
         verbose=1,
         seed=args.seed,
-        tensorboard_log=args.logdir,  # parent dir for TB
+        tensorboard_log=args.logdir,  
         policy_kwargs=dict(
             net_arch=[dict(pi=[256, 256], vf=[256, 256])],
             activation_fn=nn.ReLU,
@@ -170,14 +195,16 @@ def main():
     )
 
     # Callbacks with run-specific folders
-    eval_cb = EvalCallback(
+    eval_cb = MaskedEvalCallback(
         eval_env,
         best_model_save_path=os.path.join(run_dir, "best"),
         log_path=run_dir,
         eval_freq=args.eval_freq,
         deterministic=True,
         render=False,
+        n_eval_episodes=10,
     )
+
     ckpt_cb = CheckpointCallback(
         save_freq=max(args.checkpoint_freq // max(args.n_envs, 1), 1),
         save_path=os.path.join(run_dir, "ckpts"),
