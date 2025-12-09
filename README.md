@@ -65,3 +65,18 @@ You can also find out more about the [QMUL Game AI Group](http://gameai.eecs.qmu
 ## Acknowledgements
 
 This work was partly funded by the EPSRC CDT in Intelligent Games and Game Intelligence (IGGI)  EP/L015846/1 and EPSRC research grant EP/T008962/1.
+
+
+
+## Running Power Grid 
+To run Power Grid you need to generate a Jar file from the TAG environment and drop it into the Jar file or use the default one provided. Models are trained by calling PPO in the pgtesting folder then they appear in the Pytag\Results Folder. Once the model is ready move it to a folder you make locally in the directory pgtesting/Results/PPO . Create Local Folder inside pgtesting/Results/PPO this is where all the evaluation scripts live and will be used to evaluate a trained model. 
+
+eval_saved_model - used for evaluating a trained model in a single RL player enviornment 
+eval_MARL - used for evaluating two trained RL models against one another 
+resource_breakdown - takes the run_plan_aggregate.csv and plots it
+plot_monitor_rewards - takes the eval.monitor from a trained model and plots it
+plants_plot - takes the run_plant_aggregate.csv and pltos it into two plots one by label and one by resource
+city_plot - plots both the region and individual city build frequency uses build_city_aggregate.csv 
+run_vs_auction - generates the plots of relative frequency between running a plant and auctioning a plant
+plot_monitor_rewards - plots the evaluation logs over the training process 
+
